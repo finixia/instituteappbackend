@@ -43,12 +43,47 @@ feesRouter.post(
   })
 );
 
+feesRouter.put(
+  "/plans/:planId",
+  requireRole("ADMIN"),
+  asyncHandler(async (req, res) => {
+    const body = CreatePlanSchema.parse(req.body);
+    const plan = await FeePlanModel.findById(req.params.planId);
+    if (!plan) throw new HttpError(404, "NOT_FOUND", "Fee plan not found");
+
+    const sum = body.installments.reduce((acc, i) => acc + i.amount, 0);
+    if (Math.abs(sum - body.totalAmount) > 0.01) {
+      throw new HttpError(400, "TOTAL_MISMATCH", "Installments do not sum to totalAmount");
+    }
+
+    plan.name = body.name;
+    plan.classLevel = body.classLevel;
+    plan.termsCount = body.termsCount as any;
+    plan.totalAmount = body.totalAmount;
+    plan.installments = body.installments as any;
+    await plan.save();
+
+    res.json({ ok: true, plan });
+  })
+);
+
 feesRouter.get(
   "/plans",
   requireRole("ADMIN", "TEACHER"),
   asyncHandler(async (_req, res) => {
     const plans = await FeePlanModel.find({}).sort({ createdAt: -1 }).lean();
     res.json({ ok: true, plans });
+  })
+);
+
+feesRouter.delete(
+  "/plans/:planId",
+  requireRole("ADMIN"),
+  asyncHandler(async (req, res) => {
+    const plan = await FeePlanModel.findById(req.params.planId);
+    if (!plan) throw new HttpError(404, "NOT_FOUND", "Fee plan not found");
+    await plan.deleteOne();
+    res.json({ ok: true });
   })
 );
 
@@ -76,6 +111,50 @@ feesRouter.post(
 
     const account = await FeeAccountModel.create({ studentId: body.studentId, planId: plan._id, startDate, installments });
     res.status(201).json({ ok: true, account });
+  })
+);
+
+const UpdateAccountSchema = z.object({
+  planId: z.string().min(1).optional(),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+});
+
+feesRouter.put(
+  "/accounts/:accountId",
+  requireRole("ADMIN", "TEACHER"),
+  asyncHandler(async (req, res) => {
+    const body = UpdateAccountSchema.parse(req.body);
+    const account = await FeeAccountModel.findById(req.params.accountId);
+    if (!account) throw new HttpError(404, "NOT_FOUND", "Fee account not found");
+
+    // If planId provided, replace installments based on the plan
+    if (body.planId) {
+      const plan = await FeePlanModel.findById(body.planId).lean();
+      if (!plan) throw new HttpError(404, "NOT_FOUND", "Fee plan not found");
+      const startDate = body.startDate ?? account.startDate;
+      account.planId = plan._id;
+      account.startDate = startDate;
+      account.installments = plan.installments.map((t) => ({
+        label: t.label,
+        dueDate: addMonths(startDate, t.dueInMonths),
+        amount: t.amount,
+        status: "DUE"
+      } as any));
+    } else if (body.startDate) {
+      // Only start date changed — recompute dueDate values for existing plan
+      const plan = await FeePlanModel.findById(account.planId).lean();
+      if (!plan) throw new HttpError(404, "NOT_FOUND", "Fee plan not found");
+      account.startDate = body.startDate;
+      account.installments = plan.installments.map((t) => ({
+        label: t.label,
+        dueDate: addMonths(body.startDate!, t.dueInMonths),
+        amount: t.amount,
+        status: "DUE"
+      } as any));
+    }
+
+    await account.save();
+    res.json({ ok: true, account });
   })
 );
 
