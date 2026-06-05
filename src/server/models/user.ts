@@ -3,7 +3,8 @@ import mongoose, { Schema } from "mongoose";
 export type UserRole = "ADMIN" | "TEACHER" | "PARENT";
 
 export interface UserDoc {
-  email: string;
+  email?: string;
+  phone?: string;
   passwordHash: string;
   role: UserRole;
   linkedStudentIds?: mongoose.Types.ObjectId[];
@@ -13,7 +14,8 @@ export interface UserDoc {
 
 const UserSchema = new Schema<UserDoc>(
   {
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    email: { type: String, unique: true, sparse: true, lowercase: true, trim: true },
+    phone: { type: String, unique: true, sparse: true, trim: true },
     passwordHash: { type: String, required: true },
     role: { type: String, required: true, enum: ["ADMIN", "TEACHER", "PARENT"] },
     linkedStudentIds: [{ type: Schema.Types.ObjectId, ref: "Student" }]
@@ -22,4 +24,3 @@ const UserSchema = new Schema<UserDoc>(
 );
 
 export const UserModel = mongoose.model<UserDoc>("User", UserSchema);
-

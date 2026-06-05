@@ -18,8 +18,8 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     id: String(user._id),
     role: user.role,
     email: user.email,
+    phone: user.phone,
     linkedStudentIds: (user.linkedStudentIds ?? []).map((id) => String(id))
   };
   return next();
 }
-

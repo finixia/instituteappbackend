@@ -3,7 +3,8 @@ declare global {
     interface Request {
       user?: {
         id: string;
-        email: string;
+        email?: string;
+        phone?: string;
         role: import("../models/user").UserRole;
         linkedStudentIds?: string[];
       };
@@ -12,4 +13,3 @@ declare global {
 }
 
 export {};
-

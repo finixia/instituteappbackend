@@ -3,7 +3,8 @@ import type { ClassLevel } from "./student";
 
 export interface FeeInstallmentTemplate {
   label: string;
-  dueInMonths: number;
+  dueDate: string;
+  dueInMonths?: number;
   amount: number;
 }
 
@@ -26,7 +27,8 @@ const FeePlanSchema = new Schema<FeePlanDoc>(
     installments: [
       {
         label: { type: String, required: true },
-        dueInMonths: { type: Number, required: true, min: 0 },
+        dueDate: { type: String, required: true },
+        dueInMonths: { type: Number, min: 0 },
         amount: { type: Number, required: true, min: 0 }
       }
     ]
@@ -35,4 +37,3 @@ const FeePlanSchema = new Schema<FeePlanDoc>(
 );
 
 export const FeePlanModel = mongoose.model<FeePlanDoc>("FeePlan", FeePlanSchema);
-

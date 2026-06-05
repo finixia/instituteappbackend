@@ -5,12 +5,36 @@ import { asyncHandler } from "../middleware/asyncHandler";
 import { requireAuth } from "../middleware/requireAuth";
 import { requireRole } from "../middleware/requireRole";
 import { StudentModel } from "../models/student";
+import { UserModel } from "../models/user";
 import { HttpError } from "../utils/httpError";
 import { env } from "../../config/env";
 
 export const studentsRouter = Router();
 
 studentsRouter.use(requireAuth);
+
+async function withParentLoginSummary<T extends { _id: unknown }>(students: T[]) {
+  const studentIds = students.map((student) => String(student._id));
+  const parentUsers = await UserModel.find({
+    role: "PARENT",
+    linkedStudentIds: { $in: studentIds }
+  }).select("_id phone email linkedStudentIds").lean();
+
+  const parentByStudentId = new Map<string, { id: string; phone?: string; email?: string }>();
+  for (const user of parentUsers) {
+    for (const studentId of user.linkedStudentIds ?? []) {
+      const key = String(studentId);
+      if (!parentByStudentId.has(key)) {
+        parentByStudentId.set(key, { id: String(user._id), phone: user.phone, email: user.email });
+      }
+    }
+  }
+
+  return students.map((student) => ({
+    ...student,
+    parentLogin: parentByStudentId.get(String(student._id)) ?? null
+  }));
+}
 
 const CreateStudentSchema = z.object({
   firstName: z.string().min(1),
@@ -51,7 +75,7 @@ studentsRouter.get(
     if (subject) filter.subjects = subject;
 
     const students = await StudentModel.find(filter).sort({ createdAt: -1 }).lean();
-    res.json({ ok: true, students });
+    res.json({ ok: true, students: await withParentLoginSummary(students) });
   })
 );
 
@@ -60,8 +84,9 @@ studentsRouter.get(
   requireRole("ADMIN", "TEACHER"),
   asyncHandler(async (req, res) => {
     const student = await StudentModel.findById(req.params.id).lean();
-    if (!student) throw new HttpError(404, "NOT_FOUND", "Student not found");
-    res.json({ ok: true, student });
+    if (!student) throw new HttpError(404, "NOT_FOUND", "Student not found.", { id: req.params.id });
+    const [studentWithLogin] = await withParentLoginSummary([student]);
+    res.json({ ok: true, student: studentWithLogin });
   })
 );
 
@@ -79,7 +104,7 @@ studentsRouter.patch(
     if (patch.subjects) update.subjects = patch.subjects.map((subject) => subject.trim());
 
     const student = await StudentModel.findByIdAndUpdate(req.params.id, update, { new: true }).lean();
-    if (!student) throw new HttpError(404, "NOT_FOUND", "Student not found");
+    if (!student) throw new HttpError(404, "NOT_FOUND", "Student not found.", { id: req.params.id });
     res.json({ ok: true, student });
   })
 );
@@ -89,7 +114,7 @@ studentsRouter.delete(
   requireRole("ADMIN", "TEACHER"),
   asyncHandler(async (req, res) => {
     const student = await StudentModel.findByIdAndDelete(req.params.id).lean();
-    if (!student) throw new HttpError(404, "NOT_FOUND", "Student not found");
+    if (!student) throw new HttpError(404, "NOT_FOUND", "Student not found.", { id: req.params.id });
     res.json({ ok: true });
   })
 );
@@ -103,7 +128,7 @@ studentsRouter.post(
   requireRole("ADMIN", "TEACHER"),
   asyncHandler(async (req, res) => {
     const student = await StudentModel.findById(req.params.id);
-    if (!student) throw new HttpError(404, "NOT_FOUND", "Student not found");
+    if (!student) throw new HttpError(404, "NOT_FOUND", "Student not found.", { id: req.params.id });
 
     if (!env.AWS_REGION || !env.AWS_REKOGNITION_COLLECTION_ID) {
       throw new Error("AWS Rekognition is not configured. Set AWS_REGION and AWS_REKOGNITION_COLLECTION_ID.");
