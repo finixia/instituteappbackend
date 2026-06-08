@@ -228,6 +228,69 @@ const PaySchema = z.object({
   reference: z.string().optional()
 });
 
+const UpdateInstallmentSchema = z.object({
+  status: z.enum(["DUE", "PAID"]),
+  amount: z.number().min(0),
+  paidAmount: z.number().min(0).optional(),
+  paymentMode: z.enum(["CASH", "UPI", "CARD", "BANK_TRANSFER", "OTHER"]).optional(),
+  reference: z.string().optional()
+});
+
+feesRouter.put(
+  "/accounts/:accountId/installments/:installmentIndex",
+  requireRole("ADMIN", "TEACHER"),
+  asyncHandler(async (req, res) => {
+    const body = UpdateInstallmentSchema.parse(req.body);
+    const account = await FeeAccountModel.findById(req.params.accountId);
+    if (!account) throw new HttpError(404, "NOT_FOUND", "Fee account not found.", { accountId: req.params.accountId });
+    const index = Number(req.params.installmentIndex);
+    if (!Number.isInteger(index) || index < 0) {
+      throw new HttpError(400, "INVALID_INDEX", "Installment index is invalid.", { installmentIndex: req.params.installmentIndex });
+    }
+
+    const inst = account.installments[index];
+    if (!inst) throw new HttpError(400, "INVALID_INDEX", "Installment not found.", { installmentIndex: index });
+
+    const oldSurplus = (inst.paidAmount ?? inst.amount) - inst.amount;
+    const newAmount = body.amount;
+    const newPaidAmount = typeof body.paidAmount !== "undefined" ? body.paidAmount : (body.status === "PAID" ? inst.paidAmount ?? newAmount : undefined);
+
+    if (body.status === "PAID") {
+      if (newPaidAmount === undefined) {
+        throw new HttpError(400, "MISSING_PAID_AMOUNT", "Paid amount is required for a paid installment.");
+      }
+
+      const newSurplus = newPaidAmount - newAmount;
+      const delta = newSurplus - oldSurplus;
+
+      inst.amount = newAmount;
+      inst.status = "PAID";
+      inst.paidAt = inst.paidAt ?? todayYmd();
+      inst.paidAmount = newPaidAmount;
+      inst.paymentMode = body.paymentMode ?? inst.paymentMode ?? "CASH";
+      inst.reference = body.reference ?? inst.reference;
+
+      if (delta !== 0) {
+        adjustFutureInstallmentAmounts(account.installments, index + 1, delta);
+      }
+    } else {
+      inst.amount = newAmount;
+      inst.status = "DUE";
+      inst.paidAt = undefined;
+      inst.paidAmount = undefined;
+      inst.paymentMode = undefined;
+      inst.reference = undefined;
+
+      if (oldSurplus !== 0) {
+        adjustFutureInstallmentAmounts(account.installments, index + 1, -oldSurplus);
+      }
+    }
+
+    await account.save();
+    res.json({ ok: true, account });
+  })
+);
+
 function adjustFutureInstallmentAmounts(installments: any[], startIndex: number, remainder: number) {
   if (!installments || remainder === 0) return;
   let remaining = remainder;
