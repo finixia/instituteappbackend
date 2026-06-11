@@ -7,6 +7,8 @@ import { FeeAccountModel } from "../models/feeAccount";
 import { AttendanceModel } from "../models/attendance";
 import { ExamScoreModel } from "../models/examScore";
 import { ExamModel } from "../models/exam";
+import { NotificationModel } from "../models/notification";
+import { UserModel } from "../models/user";
 import { HttpError } from "../utils/httpError";
 
 export const parentRouter = Router();
@@ -219,6 +221,28 @@ parentRouter.get(
   asyncHandler(async (req, res) => {
     const exams = await ExamModel.find({ publishedAt: { $exists: true } }).sort({ publishedAt: -1 }).lean();
     res.json({ ok: true, exams });
+  })
+);
+
+parentRouter.post(
+  "/push-token",
+  asyncHandler(async (req, res) => {
+    const token = String(req.body.token ?? "").trim();
+    if (!token) return res.status(400).json({ ok: false, error: { message: "Missing token" } });
+
+    const parent = await UserModel.findByIdAndUpdate(req.user!.id, { expoPushToken: token }, { new: true }).lean();
+    if (!parent) throw new HttpError(404, "NOT_FOUND", "Parent user not found");
+
+    console.log("Saved Expo push token for parent", parent._id, token);
+    res.json({ ok: true, token });
+  })
+);
+
+parentRouter.get(
+  "/notifications",
+  asyncHandler(async (req, res) => {
+    const notifications = await NotificationModel.find({ recipientUserId: req.user!.id }).sort({ createdAt: -1 }).lean();
+    res.json({ ok: true, notifications });
   })
 );
 

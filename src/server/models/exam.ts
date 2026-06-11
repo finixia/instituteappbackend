@@ -7,6 +7,7 @@ export interface ExamDoc {
   subject: string;
   date: string; // YYYY-MM-DD
   maxMarks: number;
+  passingMarks: number;
   publishedAt?: Date;
   createdByUserId: mongoose.Types.ObjectId;
   createdAt: Date;
@@ -20,6 +21,7 @@ const ExamSchema = new Schema<ExamDoc>(
     subject: { type: String, required: true, trim: true },
     date: { type: String, required: true, index: true },
     maxMarks: { type: Number, required: true, min: 1 },
+    passingMarks: { type: Number, required: true, min: 0 },
     publishedAt: { type: Date, default: null },
     createdByUserId: { type: Schema.Types.ObjectId, ref: "User", required: true }
   },

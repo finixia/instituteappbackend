@@ -8,6 +8,7 @@ export interface UserDoc {
   passwordHash: string;
   role: UserRole;
   linkedStudentIds?: mongoose.Types.ObjectId[];
+  expoPushToken?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -18,7 +19,8 @@ const UserSchema = new Schema<UserDoc>(
     phone: { type: String, unique: true, sparse: true, trim: true },
     passwordHash: { type: String, required: true },
     role: { type: String, required: true, enum: ["ADMIN", "TEACHER", "PARENT"] },
-    linkedStudentIds: [{ type: Schema.Types.ObjectId, ref: "Student" }]
+      linkedStudentIds: [{ type: Schema.Types.ObjectId, ref: "Student" }],
+      expoPushToken: { type: String, default: null }
   },
   { timestamps: true }
 );
