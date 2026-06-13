@@ -9,6 +9,7 @@ import { attendanceRouter } from "./routes/attendance";
 import { examsRouter } from "./routes/exams";
 import { feesRouter } from "./routes/fees";
 import { parentRouter } from "./routes/parent";
+import { settingsRouter } from "./routes/settings";
 
 export function createApp() {
   const app = express();
@@ -25,6 +26,7 @@ export function createApp() {
   app.use("/exams", examsRouter);
   app.use("/fees", feesRouter);
   app.use("/parent", parentRouter);
+  app.use("/settings", settingsRouter);
 
   app.use(errorHandler);
   return app;
