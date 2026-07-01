@@ -221,6 +221,16 @@ feesRouter.get(
   })
 );
 
+feesRouter.delete(
+  "/accounts/:accountId",
+  requireRole("ADMIN", "TEACHER"),
+  asyncHandler(async (req, res) => {
+    const account = await FeeAccountModel.findByIdAndDelete(req.params.accountId).lean();
+    if (!account) throw new HttpError(404, "NOT_FOUND", "Fee account not found.", { accountId: req.params.accountId });
+    res.json({ ok: true });
+  })
+);
+
 const PaySchema = z.object({
   installmentIndex: z.number().int().min(0),
   paidAmount: z.number().min(0),

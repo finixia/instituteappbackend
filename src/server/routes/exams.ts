@@ -37,17 +37,67 @@ examsRouter.get(
     if (from || to) filter.date = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
 
     const exams = await ExamModel.find(filter).sort({ date: -1, createdAt: -1 }).lean();
-    res.json({ ok: true, exams });
+    const scoreCounts = await ExamScoreModel.aggregate<{ _id: unknown; count: number }>([
+      { $match: { examId: { $in: exams.map((exam) => exam._id) } } },
+      { $group: { _id: "$examId", count: { $sum: 1 } } }
+    ]);
+    const scoreCountByExamId = new Map(scoreCounts.map((entry) => [String(entry._id), entry.count]));
+
+    res.json({
+      ok: true,
+      exams: exams.map((exam) => ({
+        ...exam,
+        scoreCount: scoreCountByExamId.get(String(exam._id)) ?? 0
+      }))
+    });
   })
 );
 
 const CreateExamSchema = z.object({
   title: z.string().min(1),
+  examType: z.enum(["SINGLE", "ENTRANCE"]).optional().default("SINGLE"),
   classLevel: z.union([z.literal(6), z.literal(7), z.literal(8), z.literal(9), z.literal(10)]),
-  subject: z.string().min(1),
+  subject: z.string().min(1).optional(),
+  components: z.array(z.object({
+    subject: z.string().trim().min(1),
+    maxMarks: z.number().int().positive(),
+    passingMarks: z.number().int().min(0)
+  })).optional().default([]),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   maxMarks: z.number().int().positive(),
   passingMarks: z.number().int().min(0)
+}).transform((body) => {
+  if (body.examType === "ENTRANCE") {
+    const components = body.components;
+    return {
+      ...body,
+      subject: "Entrance Test",
+      components,
+      maxMarks: components.reduce((sum, component) => sum + component.maxMarks, 0)
+    };
+  }
+
+  return {
+    ...body,
+    subject: body.subject ?? "",
+    components: []
+  };
+}).refine((body) => body.examType === "SINGLE" ? body.subject.trim().length > 0 : body.components.length >= 2, {
+  message: "Entrance tests need at least two subject components.",
+  path: ["components"]
+}).refine((body) => {
+  if (body.examType !== "ENTRANCE") return true;
+  const subjects = body.components.map((component) => component.subject.trim().toLowerCase());
+  return new Set(subjects).size === subjects.length;
+}, {
+  message: "Entrance test subjects must be unique.",
+  path: ["components"]
+}).refine((body) => {
+  if (body.examType !== "ENTRANCE") return true;
+  return body.components.every((component) => component.passingMarks <= component.maxMarks);
+}, {
+  message: "Each subject passing marks must be less than or equal to its contribution marks.",
+  path: ["components"]
 }).refine((body) => body.passingMarks <= body.maxMarks, {
   message: "Passing marks must be less than or equal to max marks",
   path: ["passingMarks"]
@@ -60,6 +110,28 @@ examsRouter.post(
     const body = CreateExamSchema.parse(req.body);
     const exam = await ExamModel.create({ ...body, createdByUserId: req.user!.id });
     res.status(201).json({ ok: true, exam });
+  })
+);
+
+examsRouter.put(
+  "/:examId",
+  requireRole("ADMIN", "TEACHER"),
+  asyncHandler(async (req, res) => {
+    const body = CreateExamSchema.parse(req.body);
+    const exam = await ExamModel.findByIdAndUpdate(req.params.examId, body, { new: true }).lean();
+    if (!exam) throw new HttpError(404, "NOT_FOUND", "Exam not found");
+    res.json({ ok: true, exam });
+  })
+);
+
+examsRouter.delete(
+  "/:examId",
+  requireRole("ADMIN", "TEACHER"),
+  asyncHandler(async (req, res) => {
+    const exam = await ExamModel.findByIdAndDelete(req.params.examId).lean();
+    if (!exam) throw new HttpError(404, "NOT_FOUND", "Exam not found");
+    await ExamScoreModel.deleteMany({ examId: req.params.examId });
+    res.json({ ok: true });
   })
 );
 
@@ -132,6 +204,10 @@ examsRouter.get(
 const UpsertScoreSchema = z.object({
   studentId: z.string().min(1),
   marks: z.number().min(0),
+  componentMarks: z.array(z.object({
+    subject: z.string().trim().min(1),
+    marks: z.number().min(0)
+  })).optional(),
   isAbsent: z.boolean().optional().default(false)
 });
 
@@ -142,11 +218,32 @@ examsRouter.put(
     const body = UpsertScoreSchema.parse(req.body);
     const exam = await ExamModel.findById(req.params.examId).lean();
     if (!exam) throw new HttpError(404, "NOT_FOUND", "Exam not found");
-    if (!body.isAbsent && body.marks > exam.maxMarks) throw new HttpError(400, "INVALID_MARKS", "Marks exceed maxMarks");
+    let marks = body.isAbsent ? 0 : body.marks;
+    let componentMarks = body.componentMarks ?? [];
+
+    if (!body.isAbsent && exam.examType === "ENTRANCE") {
+      const components = exam.components ?? [];
+      if (components.length === 0) throw new HttpError(400, "INVALID_EXAM", "Entrance test has no subject components.");
+      const maxBySubject = new Map(components.map((component) => [component.subject, component.maxMarks]));
+      componentMarks = components.map((component) => {
+        const entry = body.componentMarks?.find((item) => item.subject === component.subject);
+        const nextMarks = entry?.marks ?? 0;
+        if (nextMarks > component.maxMarks) {
+          throw new HttpError(400, "INVALID_MARKS", `${component.subject} marks exceed ${component.maxMarks}`);
+        }
+        return { subject: component.subject, marks: nextMarks };
+      });
+      if (body.componentMarks?.some((entry) => !maxBySubject.has(entry.subject))) {
+        throw new HttpError(400, "INVALID_MARKS", "Unknown entrance subject component.");
+      }
+      marks = componentMarks.reduce((sum, component) => sum + component.marks, 0);
+    }
+
+    if (!body.isAbsent && marks > exam.maxMarks) throw new HttpError(400, "INVALID_MARKS", "Marks exceed maxMarks");
 
     const score = await ExamScoreModel.findOneAndUpdate(
       { examId: req.params.examId, studentId: body.studentId },
-      { ...body, updatedByUserId: req.user!.id },
+      { studentId: body.studentId, marks, componentMarks, isAbsent: body.isAbsent, updatedByUserId: req.user!.id },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).lean();
 
